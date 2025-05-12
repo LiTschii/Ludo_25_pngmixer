@@ -3,7 +3,7 @@
 PNG Mixer CLI - Creates a DIN A4 format PNG from A-type and B-type images
 with configurable rarity distribution.
 
-Command-line version optimized for WSL/headless environments.
+Enhanced version with all paths stored in configuration file.
 """
 
 import click
@@ -25,17 +25,35 @@ class PNGMixerCLI:
         self.loaded_a_images = {}
         self.loaded_b_images = {}
         
-        # Configuration
+        # Extended configuration with all paths
         self.config = {
-            'a_common': 70,
-            'a_uncommon': 25,
-            'a_legendary': 5,
-            'b_special': 10
+            # Image paths
+            'paths': {
+                'a_common': '',
+                'a_uncommon': '',
+                'a_legendary': '',
+                'b_normal': '',
+                'b_special': ''
+            },
+            # Distribution settings
+            'distribution': {
+                'a_common': 70,
+                'a_uncommon': 25,
+                'a_legendary': 5,
+                'b_special': 10
+            },
+            # Output settings
+            'output': {
+                'filename': 'ludo_mixed_output.png',
+                'width': 2480,
+                'height': 3508,
+                'images_per_row': 6
+            }
         }
         
     def validate_image(self, filepath, expected_size=(500, 500)):
         """Validate if image exists and has correct format"""
-        if not os.path.exists(filepath):
+        if not filepath or not os.path.exists(filepath):
             return False, f"File not found: {filepath}"
             
         try:
@@ -68,28 +86,78 @@ class PNGMixerCLI:
         """Load configuration from JSON file"""
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
-                self.config.update(json.load(f))
+                loaded_config = json.load(f)
+                # Handle both old and new config format
+                if 'paths' in loaded_config:
+                    self.config.update(loaded_config)
+                else:
+                    # Old format - migrate to new format
+                    if 'a_common' in loaded_config:
+                        self.config['distribution'].update({
+                            'a_common': loaded_config.get('a_common', 70),
+                            'a_uncommon': loaded_config.get('a_uncommon', 25),
+                            'a_legendary': loaded_config.get('a_legendary', 5),
+                            'b_special': loaded_config.get('b_special', 10)
+                        })
             click.echo(f"Configuration loaded from {config_file}")
             return True
         return False
     
-    def generate_mixed_image(self, output_path="mixed_output.png"):
+    def load_images_from_config(self):
+        """Load all images based on configuration paths"""
+        paths = self.config['paths']
+        
+        # Check if all required paths are set
+        missing_paths = [key for key, path in paths.items() if not path]
+        if missing_paths:
+            raise click.ClickException(f"Missing paths in config: {', '.join(missing_paths)}")
+        
+        # Validate and load A-type images
+        for rarity, path_key in [('common', 'a_common'), ('uncommon', 'a_uncommon'), ('legendary', 'a_legendary')]:
+            path = paths[path_key]
+            valid, msg = self.validate_image(path)
+            if not valid:
+                raise click.ClickException(f"A-type {rarity}: {msg}")
+            self.loaded_a_images[rarity] = self.load_image(path)
+            click.echo(f"  ✅ A-type {rarity}: {path}")
+        
+        # Validate and load B-type images
+        for variant, path_key in [('normal', 'b_normal'), ('special', 'b_special')]:
+            path = paths[path_key]
+            valid, msg = self.validate_image(path)
+            if not valid:
+                raise click.ClickException(f"B-type {variant}: {msg}")
+            self.loaded_b_images[variant] = self.load_image(path)
+            click.echo(f"  ✅ B-type {variant}: {path}")
+    
+    def generate_mixed_image(self, output_path=None):
         """Generate the mixed PNG image"""
+        if output_path is None:
+            output_path = self.config['output']['filename']
+            
+        # Get distribution settings
+        dist = self.config['distribution']
+        
         # Normalize A-type probabilities
-        total_a = self.config['a_common'] + self.config['a_uncommon'] + self.config['a_legendary']
+        total_a = dist['a_common'] + dist['a_uncommon'] + dist['a_legendary']
         if total_a == 0:
             raise click.ClickException("A-type probabilities cannot all be zero!")
             
         a_probs = {
-            'common': self.config['a_common'] / total_a,
-            'uncommon': self.config['a_uncommon'] / total_a,
-            'legendary': self.config['a_legendary'] / total_a
+            'common': dist['a_common'] / total_a,
+            'uncommon': dist['a_uncommon'] / total_a,
+            'legendary': dist['a_legendary'] / total_a
         }
         
         # B-type probability
-        b_special_prob = self.config['b_special'] / 100
+        b_special_prob = dist['b_special'] / 100
         
-        # Calculate image layout
+        # Calculate image layout using config values
+        output_config = self.config['output']
+        self.output_width = output_config.get('width', 2480)
+        self.output_height = output_config.get('height', 3508)
+        self.images_per_row = output_config.get('images_per_row', 6)
+        
         img_width = 500
         img_height = 500
         scale_factor = self.output_width / (self.images_per_row * img_width)
@@ -189,9 +257,14 @@ def interactive(ctx):
     
     # A-type images
     click.echo("\n🎯 A-Type Images (3 rarity levels):")
-    for rarity, filename in [('common', 'a.png'), ('uncommon', 'b.png'), ('legendary', 'c.png')]:
+    for rarity, config_key, default_filename in [
+        ('common', 'a_common', 'a.png'), 
+        ('uncommon', 'a_uncommon', 'b.png'), 
+        ('legendary', 'a_legendary', 'c.png')
+    ]:
         while True:
-            default_path = filename if os.path.exists(filename) else ""
+            current_path = mixer.config['paths'][config_key]
+            default_path = current_path or (default_filename if os.path.exists(default_filename) else "")
             path = click.prompt(f"  Path to {rarity} image", default=default_path, show_default=bool(default_path))
             
             if not path:
@@ -199,6 +272,7 @@ def interactive(ctx):
                 
             valid, msg = mixer.validate_image(path)
             if valid:
+                mixer.config['paths'][config_key] = path
                 mixer.loaded_a_images[rarity] = mixer.load_image(path)
                 click.echo(f"  ✅ {rarity.capitalize()} image loaded!")
                 break
@@ -207,9 +281,13 @@ def interactive(ctx):
     
     # B-type images  
     click.echo("\n🎯 B-Type Images (2 variants):")
-    for variant, filename in [('normal', 'xp.png'), ('special', 'xpxd.png')]:
+    for variant, config_key, default_filename in [
+        ('normal', 'b_normal', 'xp.png'), 
+        ('special', 'b_special', 'xpxd.png')
+    ]:
         while True:
-            default_path = filename if os.path.exists(filename) else ""
+            current_path = mixer.config['paths'][config_key]
+            default_path = current_path or (default_filename if os.path.exists(default_filename) else "")
             path = click.prompt(f"  Path to {variant} image", default=default_path, show_default=bool(default_path))
             
             if not path:
@@ -217,6 +295,7 @@ def interactive(ctx):
                 
             valid, msg = mixer.validate_image(path)
             if valid:
+                mixer.config['paths'][config_key] = path
                 mixer.loaded_b_images[variant] = mixer.load_image(path)
                 click.echo(f"  ✅ {variant.capitalize()} image loaded!")
                 break
@@ -227,13 +306,19 @@ def interactive(ctx):
     click.echo("\n⚙️  Configuration Section")
     click.echo("-" * 30)
     
+    dist = mixer.config['distribution']
     click.echo("\nA-Type Distribution (percentages):")
-    mixer.config['a_common'] = click.prompt("  Common %", type=int, default=mixer.config['a_common'])
-    mixer.config['a_uncommon'] = click.prompt("  Uncommon %", type=int, default=mixer.config['a_uncommon'])
-    mixer.config['a_legendary'] = click.prompt("  Legendary %", type=int, default=mixer.config['a_legendary'])
+    dist['a_common'] = click.prompt("  Common %", type=int, default=dist['a_common'])
+    dist['a_uncommon'] = click.prompt("  Uncommon %", type=int, default=dist['a_uncommon'])
+    dist['a_legendary'] = click.prompt("  Legendary %", type=int, default=dist['a_legendary'])
     
     click.echo("\nB-Type Configuration:")
-    mixer.config['b_special'] = click.prompt("  Special chance %", type=int, default=mixer.config['b_special'])
+    dist['b_special'] = click.prompt("  Special chance %", type=int, default=dist['b_special'])
+    
+    # Output configuration
+    click.echo("\nOutput Configuration:")
+    output_config = mixer.config['output']
+    output_config['filename'] = click.prompt("  Output filename", default=output_config['filename'])
     
     # Save configuration
     if click.confirm("\n💾 Save this configuration for future use?", default=True):
@@ -243,13 +328,10 @@ def interactive(ctx):
     click.echo("\n🎨 Generating Mixed Image")
     click.echo("-" * 30)
     
-    default_output = "ludo_mixed_output.png"
-    output_path = click.prompt("Output filename", default=default_output, show_default=True)
-    
     try:
-        mixer.generate_mixed_image(output_path)
+        mixer.generate_mixed_image()
         if click.confirm("\n🚀 Open the output folder?", default=True):
-            output_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+            output_dir = os.path.dirname(os.path.abspath(output_config['filename'])) or "."
             click.launch(output_dir)
     except Exception as e:
         click.echo(f"\n❌ Error generating image: {str(e)}")
@@ -257,73 +339,36 @@ def interactive(ctx):
 
 
 @cli.command()
-@click.option('--common', type=str, required=True, help='Path to common A-type image (a.png)')
-@click.option('--uncommon', type=str, required=True, help='Path to uncommon A-type image (b.png)')
-@click.option('--legendary', type=str, required=True, help='Path to legendary A-type image (c.png)')
-@click.option('--normal', type=str, required=True, help='Path to normal B-type image (xp.png)')
-@click.option('--special', type=str, required=True, help='Path to special B-type image (xpxd.png)')
-@click.option('--a-common', type=int, default=70, help='Common A-type percentage')
-@click.option('--a-uncommon', type=int, default=25, help='Uncommon A-type percentage')
-@click.option('--a-legendary', type=int, default=5, help='Legendary A-type percentage')
-@click.option('--b-special', type=int, default=10, help='B-type special chance percentage')
-@click.option('--output', '-o', type=str, default='ludo_mixed_output.png', help='Output filename')
-@click.option('--config', type=str, help='Load/save configuration from JSON file')
+@click.option('--config', '-c', type=str, default='png_mixer_config.json', help='Configuration file to use')
 @click.pass_context
-def batch(ctx, **kwargs):
-    """⚡ Batch mode - quick generation with command-line options"""
+def generate(ctx, config):
+    """🎨 Generate image from configuration file"""
     mixer = ctx.obj['mixer']
     
-    # Load config if specified
-    if kwargs['config'] and os.path.exists(kwargs['config']):
-        mixer.load_config(kwargs['config'])
+    if not os.path.exists(config):
+        raise click.ClickException(f"Configuration file not found: {config}")
     
-    # Update configuration
-    mixer.config.update({
-        'a_common': kwargs['a_common'],
-        'a_uncommon': kwargs['a_uncommon'],
-        'a_legendary': kwargs['a_legendary'],
-        'b_special': kwargs['b_special']
-    })
+    # Load configuration
+    click.echo(f"📋 Loading configuration from {config}")
+    mixer.load_config(config)
+    
+    # Check if all paths are set
+    paths = mixer.config['paths']
+    missing_paths = [key for key, path in paths.items() if not path]
+    if missing_paths:
+        raise click.ClickException(f"Missing paths in config: {', '.join(missing_paths)}")
     
     # Validate and load images
-    image_paths = {
-        'a': {
-            'common': kwargs['common'],
-            'uncommon': kwargs['uncommon'],
-            'legendary': kwargs['legendary']
-        },
-        'b': {
-            'normal': kwargs['normal'],
-            'special': kwargs['special']
-        }
-    }
-    
-    click.echo("🔍 Validating images...")
-    
-    # Load A-type images
-    for rarity, path in image_paths['a'].items():
-        valid, msg = mixer.validate_image(path)
-        if not valid:
-            raise click.ClickException(f"A-type {rarity}: {msg}")
-        mixer.loaded_a_images[rarity] = mixer.load_image(path)
-        click.echo(f"  ✅ A-type {rarity}: {path}")
-    
-    # Load B-type images
-    for variant, path in image_paths['b'].items():
-        valid, msg = mixer.validate_image(path)
-        if not valid:
-            raise click.ClickException(f"B-type {variant}: {msg}")
-        mixer.loaded_b_images[variant] = mixer.load_image(path)
-        click.echo(f"  ✅ B-type {variant}: {path}")
-    
-    # Save config if specified
-    if kwargs['config']:
-        mixer.save_config(kwargs['config'])
+    click.echo("🔍 Validating and loading images...")
+    try:
+        mixer.load_images_from_config()
+    except Exception as e:
+        raise click.ClickException(str(e))
     
     # Generate image
     click.echo("\n🎨 Generating mixed image...")
     try:
-        mixer.generate_mixed_image(kwargs['output'])
+        mixer.generate_mixed_image()
     except Exception as e:
         raise click.ClickException(f"Failed to generate image: {str(e)}")
 
@@ -341,11 +386,18 @@ def config(ctx, config):
     else:
         mixer.load_config(config)
         click.echo(f"📄 Current configuration from {config}:")
-        click.echo(f"  A-Type Distribution:")
-        click.echo(f"    Common: {mixer.config['a_common']}%")
-        click.echo(f"    Uncommon: {mixer.config['a_uncommon']}%")
-        click.echo(f"    Legendary: {mixer.config['a_legendary']}%")
-        click.echo(f"  B-Type Special Chance: {mixer.config['b_special']}%")
+        click.echo(f"\nImage Paths:")
+        for key, path in mixer.config['paths'].items():
+            click.echo(f"  {key}: {path or 'Not set'}")
+        click.echo(f"\nDistribution:")
+        dist = mixer.config['distribution']
+        click.echo(f"  A-Type - Common: {dist['a_common']}%, Uncommon: {dist['a_uncommon']}%, Legendary: {dist['a_legendary']}%")
+        click.echo(f"  B-Type Special Chance: {dist['b_special']}%")
+        click.echo(f"\nOutput:")
+        output = mixer.config['output']
+        click.echo(f"  Filename: {output['filename']}")
+        click.echo(f"  Size: {output['width']}x{output['height']}")
+        click.echo(f"  Images per row: {output['images_per_row']}")
 
 
 @cli.command()
@@ -355,35 +407,123 @@ def examples():
     click.echo("=" * 40)
     
     click.echo("\n1️⃣  Interactive Mode (Recommended):")
+    click.echo("   ./cli.sh interactive")
+    click.echo("   # or")
     click.echo("   python png_mixer_cli.py interactive")
     
-    click.echo("\n2️⃣  Batch Mode with all options:")
-    click.echo("   python png_mixer_cli.py batch \\")
-    click.echo("     --common a.png \\")
-    click.echo("     --uncommon b.png \\") 
-    click.echo("     --legendary c.png \\")
-    click.echo("     --normal xp.png \\")
-    click.echo("     --special xpxd.png \\")
-    click.echo("     --a-common 60 \\")
-    click.echo("     --a-uncommon 30 \\")
-    click.echo("     --a-legendary 10 \\")
-    click.echo("     --b-special 15 \\")
-    click.echo("     --output my_ludo_cards.png")
+    click.echo("\n2️⃣  Generate from configuration file:")
+    click.echo("   ./cli.sh generate")
+    click.echo("   # or with custom config")
+    click.echo("   ./cli.sh generate --config my_config.json")
     
-    click.echo("\n3️⃣  Using configuration file:")
-    click.echo("   python png_mixer_cli.py batch \\")
-    click.echo("     --config my_settings.json \\")
-    click.echo("     --common a.png --uncommon b.png --legendary c.png \\")
-    click.echo("     --normal xp.png --special xpxd.png")
+    click.echo("\n3️⃣  View/manage configuration:")
+    click.echo("   ./cli.sh config")
+    click.echo("   # or with custom config")
+    click.echo("   ./cli.sh config --config my_config.json")
     
-    click.echo("\n4️⃣  View current configuration:")
-    click.echo("   python png_mixer_cli.py config")
+    click.echo("\n4️⃣  Example configuration file (png_mixer_config.json):")
+    click.echo(json.dumps({
+        "paths": {
+            "a_common": "a.png",
+            "a_uncommon": "b.png",
+            "a_legendary": "c.png",
+            "b_normal": "xp.png",
+            "b_special": "xpxd.png"
+        },
+        "distribution": {
+            "a_common": 70,
+            "a_uncommon": 25,
+            "a_legendary": 5,
+            "b_special": 10
+        },
+        "output": {
+            "filename": "ludo_mixed_output.png",
+            "width": 2480,
+            "height": 3508,
+            "images_per_row": 6
+        }
+    }, indent=2))
     
     click.echo("\n💡 Tips:")
-    click.echo("   • All images must be 500x500 PNG format")
-    click.echo("   • A:B ratio is always maintained at 1:1")
-    click.echo("   • Output is DIN A4 format (2480x3508 pixels)")
-    click.echo("   • 6 images per row")
+    click.echo("   • All image paths and settings are stored in the config file")
+    click.echo("   • Use interactive mode to set up everything easily")
+    click.echo("   • Generate command uses only the config file")
+    click.echo("   • cli.sh automatically handles virtual environment")
+
+
+@cli.command()
+@click.option('--common', type=str, help='Path to common A-type image (a.png)')
+@click.option('--uncommon', type=str, help='Path to uncommon A-type image (b.png)')
+@click.option('--legendary', type=str, help='Path to legendary A-type image (c.png)')
+@click.option('--normal', type=str, help='Path to normal B-type image (xp.png)')
+@click.option('--special', type=str, help='Path to special B-type image (xpxd.png)')
+@click.option('--a-common', type=int, help='Common A-type percentage')
+@click.option('--a-uncommon', type=int, help='Uncommon A-type percentage')
+@click.option('--a-legendary', type=int, help='Legendary A-type percentage')
+@click.option('--b-special', type=int, help='B-type special chance percentage')
+@click.option('--output', '-o', type=str, help='Output filename')
+@click.option('--config', type=str, help='Save/load configuration from JSON file')
+@click.pass_context
+def batch(ctx, **kwargs):
+    """⚡ Batch mode - quick setup with command-line options (DEPRECATED)"""
+    click.echo("⚠️  Warning: 'batch' command is deprecated!")
+    click.echo("   Use 'interactive' mode to set up your config, then use 'generate'.")
+    click.echo("   This provides better organization with all settings in one place.")
+    click.echo("\n   Recommended workflow:")
+    click.echo("   1. ./cli.sh interactive     # Set up configuration")
+    click.echo("   2. ./cli.sh generate        # Generate images")
+    click.echo("\n   For backwards compatibility, this command still works...")
+    
+    mixer = ctx.obj['mixer']
+    
+    # Load config if specified
+    if kwargs['config'] and os.path.exists(kwargs['config']):
+        mixer.load_config(kwargs['config'])
+    
+    # Update configuration from command line args (only if provided)
+    if kwargs.get('a_common') is not None:
+        mixer.config['distribution']['a_common'] = kwargs['a_common']
+    if kwargs.get('a_uncommon') is not None:
+        mixer.config['distribution']['a_uncommon'] = kwargs['a_uncommon']
+    if kwargs.get('a_legendary') is not None:
+        mixer.config['distribution']['a_legendary'] = kwargs['a_legendary']
+    if kwargs.get('b_special') is not None:
+        mixer.config['distribution']['b_special'] = kwargs['b_special']
+    
+    # Required image paths
+    required_args = ['common', 'uncommon', 'legendary', 'normal', 'special']
+    missing_args = [arg for arg in required_args if not kwargs.get(arg)]
+    if missing_args:
+        raise click.ClickException(f"Missing required arguments: {', '.join(f'--{arg}' for arg in missing_args)}")
+    
+    # Set image paths
+    mixer.config['paths']['a_common'] = kwargs['common']
+    mixer.config['paths']['a_uncommon'] = kwargs['uncommon']
+    mixer.config['paths']['a_legendary'] = kwargs['legendary']
+    mixer.config['paths']['b_normal'] = kwargs['normal']
+    mixer.config['paths']['b_special'] = kwargs['special']
+    
+    # Set output path if provided
+    if kwargs.get('output'):
+        mixer.config['output']['filename'] = kwargs['output']
+    
+    # Validate and load images
+    click.echo("🔍 Validating images...")
+    try:
+        mixer.load_images_from_config()
+    except Exception as e:
+        raise click.ClickException(str(e))
+    
+    # Save config if specified
+    if kwargs['config']:
+        mixer.save_config(kwargs['config'])
+    
+    # Generate image
+    click.echo("\n🎨 Generating mixed image...")
+    try:
+        mixer.generate_mixed_image()
+    except Exception as e:
+        raise click.ClickException(f"Failed to generate image: {str(e)}")
 
 
 if __name__ == '__main__':
