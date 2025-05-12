@@ -14,26 +14,29 @@ fi
 
 echo "Python 3 found: $(python3 --version)"
 
-# Check if pip is installed
-if ! command -v pip3 &> /dev/null; then
-    echo "Error: pip3 is required but not installed."
-    echo "Please install pip3"
-    exit 1
+# Check if we're in a virtual environment
+if [[ -n "$VIRTUAL_ENV" ]]; then
+    echo "Virtual environment detected: $VIRTUAL_ENV"
+    PIP_CMD="pip"
+else
+    echo "No virtual environment detected. Creating one..."
+    python3 -m venv .venv
+    echo "Virtual environment created. Please activate it:"
+    echo "  source .venv/bin/activate"
+    echo "Then run this script again."
+    exit 0
 fi
-
-echo "pip3 found: $(pip3 --version)"
-echo ""
 
 # Install dependencies
 echo "Installing dependencies..."
-pip3 install -r requirements.txt
+$PIP_CMD install -r requirements.txt
 
 if [ $? -eq 0 ]; then
     echo ""
     echo "✓ Setup completed successfully!"
     echo ""
     echo "To run the PNG Mixer:"
-    echo "  python3 png_mixer.py"
+    echo "  python png_mixer.py"
     echo ""
     echo "Make sure you have your images ready:"
     echo "  - A-Type: a.png (common), b.png (uncommon), c.png (legendary)"
