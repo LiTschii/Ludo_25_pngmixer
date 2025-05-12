@@ -17,6 +17,7 @@ Ein Python-Tool zum Mischen von A-Typ und B-Typ PNG-Bildern mit konfigurierbarer
   - Slider für A-Typ Verteilung (Common/Uncommon/Legendary %)
   - Slider für B-Typ Special-Chance %
   - 1:1 Verhältnis zwischen A- und B-Typ Bildern (verpflichtend)
+  - Alle Pfade und Einstellungen in JSON-Konfiguration
 
 - **Output**:
   - DIN A4 Format (2480 x 3508 Pixel bei 300 DPI)
@@ -41,6 +42,11 @@ cd Ludo_25_pngmixer
 pip install -r requirements.txt
 ```
 
+3. CLI-Script ausführbar machen:
+```bash
+chmod +x cli.sh
+```
+
 ## 🖥️ GUI-Version (Desktop)
 
 ```bash
@@ -49,64 +55,86 @@ python png_mixer.py
 
 ## 💻 CLI-Version (WSL/Headless)
 
-### Interaktiver Modus (Empfohlen für Einsteiger)
-```bash
-python png_mixer_cli.py interactive
-```
+### 🚀 Shortcut mit cli.sh
 
-### Batch-Modus (Für Automatisierung)
-```bash
-python png_mixer_cli.py batch \
-  --common a.png \
-  --uncommon b.png \
-  --legendary c.png \
-  --normal xp.png \
-  --special xpxd.png \
-  --a-common 70 \
-  --a-uncommon 25 \
-  --a-legendary 5 \
-  --b-special 10 \
-  --output result.png
-```
+Das `cli.sh` Script bietet eine bequeme Kurzform und verwaltet automatisch die Virtual Environment:
 
-### Verfügbare CLI-Befehle
 ```bash
 # Interaktiver Modus
-python png_mixer_cli.py interactive
+./cli.sh interactive
 
-# Batch-Modus mit allen Optionen
-python png_mixer_cli.py batch [OPTIONS]
+# Generieren mit Konfigurationsdatei
+./cli.sh generate
 
 # Konfiguration verwalten
-python png_mixer_cli.py config
-
-# Beispiele anzeigen
-python png_mixer_cli.py examples
+./cli.sh config
 
 # Hilfe anzeigen
-python png_mixer_cli.py --help
+./cli.sh --help
 ```
 
-## ⚙️ Konfigurationsdatei
+### 📋 Neue erweiterte Konfigurationsdatei
 
-Die CLI-Version kann Konfigurationen in JSON-Dateien speichern und laden:
+Alle Einstellungen werden jetzt in einer strukturierten JSON-Datei gespeichert:
 
 ```json
 {
-  "a_common": 70,
-  "a_uncommon": 25,
-  "a_legendary": 5,
-  "b_special": 10
+  "paths": {
+    "a_common": "a.png",
+    "a_uncommon": "b.png", 
+    "a_legendary": "c.png",
+    "b_normal": "xp.png",
+    "b_special": "xpxd.png"
+  },
+  "distribution": {
+    "a_common": 70,
+    "a_uncommon": 25,
+    "a_legendary": 5,
+    "b_special": 10
+  },
+  "output": {
+    "filename": "ludo_mixed_output.png",
+    "width": 2480,
+    "height": 3508,
+    "images_per_row": 6
+  }
 }
 ```
 
-Verwendung:
-```bash
-# Konfiguration speichern
-python png_mixer_cli.py config
+### 🎯 Empfohlener Workflow
 
-# Mit gespeicherter Konfiguration arbeiten
-python png_mixer_cli.py batch --config meine_config.json [andere optionen]
+```bash
+# 1. Einmalig: Konfiguration erstellen
+./cli.sh interactive
+
+# 2. Bilder generieren (wiederholbar)
+./cli.sh generate
+
+# 3. Konfiguration ansehen/bearbeiten
+./cli.sh config
+```
+
+### 🔧 Alle verfügbaren Befehle
+
+```bash
+# Interaktiver Setup (empfohlen für erste Verwendung)
+./cli.sh interactive
+
+# Bilder aus Konfigurationsdatei generieren
+./cli.sh generate
+./cli.sh generate --config meine_config.json
+
+# Konfiguration verwalten
+./cli.sh config
+./cli.sh config --config meine_config.json
+
+# Beispiele und Hilfe anzeigen
+./cli.sh examples
+./cli.sh --help
+
+# Ohne cli.sh (direkt mit Python)
+python png_mixer_cli.py interactive
+python png_mixer_cli.py generate --config my_config.json
 ```
 
 ## 📋 Bildanforderungen
@@ -119,36 +147,45 @@ python png_mixer_cli.py batch --config meine_config.json [andere optionen]
 ## 🧮 Technische Details
 
 - **DIN A4**: $2480 \times 3508$ Pixel bei 300 DPI
-- **Bilder pro Reihe**: 6
+- **Bilder pro Reihe**: 6 (konfigurierbar)
 - **Bild-Ratio**: Immer 1:1 (A-Typ : B-Typ)
 - **Automatische Skalierung**: Bilder werden proportional an die verfügbare Fläche angepasst
 - **Zufällige Anordnung**: Die generierten Bilder werden gemischt und zufällig angeordnet
 
 ## 🎯 Verwendungsbeispiele
 
-### CLI - Interaktiver Modus
+### Erstmalige Einrichtung
 ```bash
-python png_mixer_cli.py interactive
+# Schritt 1: Konfiguration erstellen
+./cli.sh interactive
+# -> Führt durch Bildauswahl und Einstellungen
+# -> Speichert alles in png_mixer_config.json
+
+# Schritt 2: Bilder generieren
+./cli.sh generate
+# -> Verwendet gespeicherte Konfiguration
 ```
-- Schritt-für-Schritt Anleitung
-- Bildvalidierung
-- Konfiguration mit Prompts
-- Automatisches Speichern der Einstellungen
 
-### CLI - Batch-Verarbeitung
+### Mehrere Konfigurationen verwenden
 ```bash
-# Einfache Ausführung mit Standardwerten
-python png_mixer_cli.py batch \
-  --common a.png --uncommon b.png --legendary c.png \
-  --normal xp.png --special xpxd.png
+# Verschiedene Konfigurationen erstellen
+./cli.sh interactive
+# -> Konfiguration als 'set1_config.json' speichern
 
-# Mit benutzerdefinierten Wahrscheinlichkeiten
-python png_mixer_cli.py batch \
-  --common a.png --uncommon b.png --legendary c.png \
-  --normal xp.png --special xpxd.png \
-  --a-common 60 --a-uncommon 30 --a-legendary 10 \
-  --b-special 20 \
-  --output meine_karten.png
+# Mit spezifischer Konfiguration arbeiten
+./cli.sh generate --config set1_config.json
+./cli.sh config --config set1_config.json
+```
+
+### Automatisierung/Scripting
+```bash
+#!/bin/bash
+# Automatisch mehrere Varianten generieren
+
+# Lade verschiedene Konfigurationen und generiere
+./cli.sh generate --config christmas_cards.json
+./cli.sh generate --config halloween_cards.json
+./cli.sh generate --config standard_cards.json
 ```
 
 ## 🔧 Fehlerbehebung
@@ -157,17 +194,39 @@ python png_mixer_cli.py batch \
 Falls die GUI-Version nicht funktioniert:
 ```bash
 # Verwenden Sie die CLI-Version
-python png_mixer_cli.py interactive
+./cli.sh interactive
 ```
 
 ### Bilder werden nicht gefunden
 ```bash
 # Überprüfen Sie die Pfade
-ls -la *.png
+./cli.sh config
 
-# Verwenden Sie absolute Pfade
-python png_mixer_cli.py batch --common /vollständiger/pfad/zu/a.png [...]
+# Bei Problemen: Interaktiven Modus verwenden
+./cli.sh interactive
 ```
+
+### Virtual Environment Probleme
+```bash
+# cli.sh verwaltet das venv automatisch
+# Falls Probleme auftreten:
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## 📝 Changelog
+
+### Version 2.0
+- ✨ **Neue CLI-Struktur**: Alle Argumente in Konfigurationsdatei
+- 🚀 **cli.sh Shortcut**: Automatisierte venv-Verwaltung
+- 📊 **`generate` Befehl**: Separate Generierung von Setup
+- 🔧 **Erweiterte Konfiguration**: Strukturierte JSON mit Pfaden und Output-Einstellungen
+- ⚡ **Verbesserte UX**: Klarere Befehle und weniger Redundanz
+
+### Version 1.0  
+- 🎨 GUI-Version mit tkinter
+- 💻 Erste CLI-Version mit direkten Argumenten
+- 📸 PNG-Generierung mit konfigurierbaren Wahrscheinlichkeiten
 
 ## 📄 Lizenz
 
