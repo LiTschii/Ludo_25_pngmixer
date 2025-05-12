@@ -3,7 +3,7 @@
 PNG Mixer CLI - Creates duplex-ready PNG files with A-type and B-type images
 on separate pages for double-sided printing.
 
-Enhanced version with configurable total image count.
+Enhanced version with correct duplex handling and full page filling.
 """
 
 import click
@@ -49,7 +49,9 @@ class PNGMixerCLI:
                 'height': 3508,
                 'images_per_row': 6,
                 'duplex_mode': True,
-                'total_images': 1000  # Total number of images to generate (must be even)
+                'total_images': 1000,
+                'mirror_b_page': False,  # New option: don't mirror content
+                'fill_all_pages': True   # New option: fill all pages completely
             }
         }
         
@@ -101,6 +103,11 @@ class PNGMixerCLI:
                             'a_legendary': loaded_config.get('a_legendary', 5),
                             'b_special': loaded_config.get('b_special', 10)
                         })
+                # Ensure new options exist with defaults
+                if 'mirror_b_page' not in self.config['output']:
+                    self.config['output']['mirror_b_page'] = False
+                if 'fill_all_pages' not in self.config['output']:
+                    self.config['output']['fill_all_pages'] = True
             click.echo(f"Configuration loaded from {config_file}")
             return True
         return False
@@ -141,10 +148,10 @@ class PNGMixerCLI:
         images_per_page = self.images_per_row * rows_per_page
         
         # Calculate pages needed
-        pages_needed_a = (total_images // 2 + images_per_page - 1) // images_per_page
-        pages_needed_b = (total_images // 2 + images_per_page - 1) // images_per_page
+        images_per_type = total_images // 2
+        pages_needed = (images_per_type + images_per_page - 1) // images_per_page
         
-        return pages_needed_a, pages_needed_b, images_per_page
+        return pages_needed, images_per_page
     
     def create_page(self, images, page_type="A", page_number=1):
         """Create a single page with given images"""
@@ -186,13 +193,22 @@ class PNGMixerCLI:
         # Get configuration
         dist = self.config['distribution']
         total_images = self.config['output'].get('total_images', 1000)
+        fill_all_pages = self.config['output'].get('fill_all_pages', True)
+        mirror_b_page = self.config['output'].get('mirror_b_page', False)
         
         # Ensure total_images is even
         if total_images % 2 != 0:
             total_images += 1
             click.echo(f"⚠️ Total images must be even. Adjusted to {total_images}")
         
-        images_per_type = total_images // 2
+        # Calculate pages needed
+        pages_needed, images_per_page = self.calculate_pages_needed(total_images)
+        
+        click.echo(f"📊 Generation Plan:")
+        click.echo(f"  Total images: {total_images}")
+        click.echo(f"  Images per type: {total_images // 2}")
+        click.echo(f"  Images per page: {images_per_page}")
+        click.echo(f"  Pages needed: {pages_needed} (for each type)")
         
         # Normalize A-type probabilities
         total_a = dist['a_common'] + dist['a_uncommon'] + dist['a_legendary']
@@ -208,14 +224,16 @@ class PNGMixerCLI:
         # B-type probability
         b_special_prob = dist['b_special'] / 100
         
-        # Calculate pages needed
-        pages_a, pages_b, images_per_page = self.calculate_pages_needed(total_images)
-        
-        click.echo(f"📊 Generation Plan:")
-        click.echo(f"  Total images: {total_images}")
-        click.echo(f"  Images per type: {images_per_type}")
-        click.echo(f"  Images per page: {images_per_page}")
-        click.echo(f"  Pages needed - A: {pages_a}, B: {pages_b}")
+        # Calculate actual images needed
+        if fill_all_pages:
+            # Fill all pages completely
+            total_slots = pages_needed * images_per_page
+            images_per_type = total_slots // 2
+            actual_total = images_per_type * 2
+            if actual_total != total_images:
+                click.echo(f"📄 Adjusting to fill all pages: {actual_total} images total")
+        else:
+            images_per_type = total_images // 2
         
         # Generate A-type images
         click.echo("\n🎯 Generating A-type images...")
@@ -242,57 +260,87 @@ class PNGMixerCLI:
         
         # Create pages
         base_name = os.path.splitext(output_path)[0]
+        created_files = []
         
         # Create A-type pages
         click.echo("\n📄 Creating A-type pages...")
-        for page_num in range(pages_a):
+        for page_num in range(pages_needed):
             start_idx = page_num * images_per_page
             end_idx = min(start_idx + images_per_page, len(a_images))
             page_images = a_images[start_idx:end_idx]
             
+            # Fill page if needed and fill_all_pages is True
+            if fill_all_pages and len(page_images) < images_per_page and page_images:
+                # Repeat images to fill the page
+                while len(page_images) < images_per_page:
+                    page_images.extend(a_images[start_idx:min(end_idx, start_idx + (images_per_page - len(page_images)))])
+                # Trim to exact size
+                page_images = page_images[:images_per_page]
+            
             page_a, a_count, a_slots = self.create_page(page_images, "A", page_num + 1)
             
-            if pages_a == 1:
+            if pages_needed == 1:
                 page_a_path = f"{base_name}_page_A.png"
             else:
                 page_a_path = f"{base_name}_page_A_{page_num + 1}.png"
             
             page_a.save(page_a_path)
+            created_files.append(page_a_path)
             click.echo(f"  ✅ Saved: {page_a_path} ({a_count} images)")
         
-        # Create B-type pages (mirrored for duplex)
+        # Create B-type pages
         click.echo("📄 Creating B-type pages...")
-        for page_num in range(pages_b):
+        for page_num in range(pages_needed):
             start_idx = page_num * images_per_page
             end_idx = min(start_idx + images_per_page, len(b_images))
             page_images = b_images[start_idx:end_idx]
             
-            page_b, b_count, b_slots = self.create_page(page_images, "B", page_num + 1)
-            page_b = page_b.transpose(Image.FLIP_LEFT_RIGHT)  # Mirror for duplex
+            # Fill page if needed and fill_all_pages is True
+            if fill_all_pages and len(page_images) < images_per_page and page_images:
+                # Repeat images to fill the page
+                while len(page_images) < images_per_page:
+                    page_images.extend(b_images[start_idx:min(end_idx, start_idx + (images_per_page - len(page_images)))])
+                # Trim to exact size
+                page_images = page_images[:images_per_page]
             
-            if pages_b == 1:
+            page_b, b_count, b_slots = self.create_page(page_images, "B", page_num + 1)
+            
+            # Apply mirroring only if configured
+            if mirror_b_page:
+                page_b = page_b.transpose(Image.FLIP_LEFT_RIGHT)
+                mirror_note = " (mirrored)"
+            else:
+                mirror_note = ""
+            
+            if pages_needed == 1:
                 page_b_path = f"{base_name}_page_B.png"
             else:
                 page_b_path = f"{base_name}_page_B_{page_num + 1}.png"
             
             page_b.save(page_b_path)
-            click.echo(f"  ✅ Saved: {page_b_path} ({b_count} images, mirrored)")
+            created_files.append(page_b_path)
+            click.echo(f"  ✅ Saved: {page_b_path} ({b_count} images{mirror_note})")
         
         # Show statistics
         click.echo("\n📊 Generation Results:")
-        click.echo(f"  🎯 A-type: {len(a_images)} images in {pages_a} page(s)")
+        click.echo(f"  🎯 A-type: {len(a_images)} images in {pages_needed} page(s)")
         click.echo(f"    • Common: {a_probs['common']*100:.1f}% chance")
         click.echo(f"    • Uncommon: {a_probs['uncommon']*100:.1f}% chance")  
         click.echo(f"    • Legendary: {a_probs['legendary']*100:.1f}% chance")
-        click.echo(f"  🎯 B-type: {len(b_images)} images in {pages_b} page(s)")
+        click.echo(f"  🎯 B-type: {len(b_images)} images in {pages_needed} page(s)")
         click.echo(f"    • Special chance: {b_special_prob*100:.1f}%")
         
+        if fill_all_pages:
+            click.echo(f"  📄 All pages filled completely with {images_per_page} images each")
+        
         click.echo("\n🖨️ Duplex Printing Instructions:")
-        if pages_a == 1 and pages_b == 1:
+        if not mirror_b_page:
+            click.echo("  ⚠️  B-pages are NOT mirrored - test your printer's duplex behavior!")
+        if pages_needed == 1:
             click.echo("  1. Print page A")
-            click.echo("  2. Put printed page back in printer (flipped)")
+            click.echo("  2. Put printed page back in printer (check orientation)")
             click.echo("  3. Print page B") 
-            click.echo("  4. Pages should align perfectly!")
+            click.echo("  4. Verify alignment with your printer")
         else:
             click.echo("  Multiple pages detected:")
             click.echo("  1. Print all A pages first")
@@ -300,11 +348,8 @@ class PNGMixerCLI:
             click.echo("  3. Print all B pages")
             click.echo("  4. Check alignment of first page for orientation")
         
-        # Return first page paths for backward compatibility
-        if pages_a == 1 and pages_b == 1:
-            return f"{base_name}_page_A.png", f"{base_name}_page_B.png"
-        else:
-            return f"{base_name}_page_A_1.png", f"{base_name}_page_B_1.png"
+        # Return created files for reference
+        return created_files
 
     def generate_mixed_image(self, output_path=None):
         """Generate images - duplex mode or traditional mode based on config"""
@@ -409,6 +454,11 @@ def interactive(ctx):
     mixer.config['output']['total_images'] = total_images
     click.echo(f"  📊 Will create {total_images // 2} A-type and {total_images // 2} B-type images")
     
+    # Duplex options
+    click.echo("\nDuplex Options:")
+    mixer.config['output']['fill_all_pages'] = click.confirm("  Fill all pages completely?", default=mixer.config['output'].get('fill_all_pages', True))
+    mixer.config['output']['mirror_b_page'] = click.confirm("  Mirror B-pages horizontally? (some printers need this)", default=mixer.config['output'].get('mirror_b_page', False))
+    
     # Distribution settings
     dist = mixer.config['distribution']
     click.echo("\nA-Type Distribution (percentages):")
@@ -433,7 +483,7 @@ def interactive(ctx):
     click.echo("-" * 30)
     
     try:
-        mixer.generate_mixed_image()
+        created_files = mixer.generate_mixed_image()
         if click.confirm("\n🚀 Open the output folder?", default=True):
             output_dir = os.path.dirname(os.path.abspath(output_config['filename'])) or "."
             # Use WSL-compatible command
@@ -446,8 +496,10 @@ def interactive(ctx):
 @cli.command()
 @click.option('--config', '-c', type=str, default='png_mixer_config.json', help='Configuration file to use')
 @click.option('--total', '-t', type=int, help='Total number of images to generate (must be even)')
+@click.option('--fill-pages/--no-fill-pages', default=None, help='Fill all pages completely')
+@click.option('--mirror-b/--no-mirror-b', default=None, help='Mirror B-pages horizontally')
 @click.pass_context
-def generate(ctx, config, total):
+def generate(ctx, config, total, fill_pages, mirror_b):
     """🎨 Generate duplex images from configuration file"""
     mixer = ctx.obj['mixer']
     
@@ -458,13 +510,21 @@ def generate(ctx, config, total):
     click.echo(f"📋 Loading configuration from {config}")
     mixer.load_config(config)
     
-    # Override total images if provided
+    # Override settings if provided
     if total is not None:
         if total % 2 != 0:
             click.echo(f"⚠️ Total images must be even. Using {total + 1} instead.")
             total += 1
         mixer.config['output']['total_images'] = total
         click.echo(f"🔢 Overriding total images to {total}")
+    
+    if fill_pages is not None:
+        mixer.config['output']['fill_all_pages'] = fill_pages
+        click.echo(f"📄 Fill all pages: {fill_pages}")
+    
+    if mirror_b is not None:
+        mixer.config['output']['mirror_b_page'] = mirror_b
+        click.echo(f"🔄 Mirror B-pages: {mirror_b}")
     
     # Check if all paths are set
     paths = mixer.config['paths']
@@ -482,7 +542,8 @@ def generate(ctx, config, total):
     # Generate images
     click.echo("\n🎨 Generating duplex pages...")
     try:
-        mixer.generate_mixed_image()
+        created_files = mixer.generate_mixed_image()
+        click.echo(f"\n🎉 Created {len(created_files)} files successfully!")
     except Exception as e:
         raise click.ClickException(f"Failed to generate images: {str(e)}")
 
@@ -514,6 +575,8 @@ def config(ctx, config):
         click.echo(f"  Size: {output['width']}x{output['height']}")
         click.echo(f"  Images per row: {output['images_per_row']}")
         click.echo(f"  Duplex mode: {'Enabled' if output.get('duplex_mode', True) else 'Disabled'}")
+        click.echo(f"  Fill all pages: {'Yes' if output.get('fill_all_pages', True) else 'No'}")
+        click.echo(f"  Mirror B-pages: {'Yes' if output.get('mirror_b_page', False) else 'No'}")
 
 
 @cli.command()
@@ -522,39 +585,38 @@ def examples():
     click.echo("🎮 Ludo PNG Mixer - Duplex Mode Examples")
     click.echo("=" * 40)
     
-    click.echo("\n1️⃣  Interactive Setup with Custom Total:")
+    click.echo("\n1️⃣  Interactive Setup with Duplex Options:")
     click.echo("   ./cli.sh interactive")
-    click.echo("   # Specify total images (e.g., 500, 1000, 2000)")
+    click.echo("   # Choose whether to mirror B-pages")
+    click.echo("   # Choose whether to fill all pages")
     
-    click.echo("\n2️⃣  Generate with Different Totals:")
-    click.echo("   ./cli.sh generate --total 500")
-    click.echo("   ./cli.sh generate --total 2000 --config special.json")
+    click.echo("\n2️⃣  Generate with Different Options:")
+    click.echo("   ./cli.sh generate --total 500 --no-mirror-b")
+    click.echo("   ./cli.sh generate --total 2000 --mirror-b --fill-pages")
     
-    click.echo("\n3️⃣  Multiple Pages Example:")
-    click.echo("   # 4000 images will create multiple pages")
-    click.echo("   # ~166 images per page (6x28 at DIN A4)")
-    click.echo("   ./cli.sh generate --total 4000")
+    click.echo("\n3️⃣  Fix Mirroring Issues:")
+    click.echo("   # If images appear backwards:")
+    click.echo("   ./cli.sh generate --no-mirror-b")
+    click.echo("   # If duplex alignment is off:")
+    click.echo("   ./cli.sh generate --mirror-b")
     
-    click.echo("\n4️⃣  Configuration with Total Images:")
+    click.echo("\n4️⃣  Configuration with New Options:")
     example_config = {
         "output": {
             "total_images": 1000,
             "filename": "ludo_cards.png",
-            "duplex_mode": True
+            "duplex_mode": True,
+            "mirror_b_page": False,  # Don't mirror by default
+            "fill_all_pages": True   # Fill all pages by default
         }
     }
     click.echo(json.dumps(example_config, indent=2))
     
-    click.echo("\n💡 Tips:")
-    click.echo("   • Total images must be even number")
-    click.echo("   • Half will be A-type, half will be B-type")
-    click.echo("   • Multiple pages created automatically if needed")
-    click.echo("   • Page B is always mirrored for duplex compatibility")
-    
-    click.echo("\n📐 Images per page calculation:")
-    click.echo("   • DIN A4: ~166 images (6 columns × ~28 rows)")
-    click.echo("   • 1000 total → 500 each type → 3 pages A + 3 pages B")
-    click.echo("   • 166 total → 83 each type → 1 page A + 1 page B")
+    click.echo("\n🔧 Troubleshooting:")
+    click.echo("   • Images backwards? Use --no-mirror-b")
+    click.echo("   • Incomplete pages? Use --fill-pages")  
+    click.echo("   • Duplex misaligned? Try --mirror-b")
+    click.echo("   • Test with small batches first (166 images)")
 
 
 # Keep the batch command for backwards compatibility
@@ -571,6 +633,7 @@ def examples():
 @click.option('--output', '-o', type=str, help='Output filename')
 @click.option('--total', '-t', type=int, help='Total number of images (must be even)')
 @click.option('--config', type=str, help='Save/load configuration from JSON file')
+@click.option('--mirror-b/--no-mirror-b', default=False, help='Mirror B-pages horizontally')
 @click.pass_context
 def batch(ctx, **kwargs):
     """⚡ Batch mode - quick setup with command-line options (DEPRECATED)"""
@@ -606,6 +669,9 @@ def batch(ctx, **kwargs):
             total += 1
         mixer.config['output']['total_images'] = total
     
+    # Handle mirror option
+    mixer.config['output']['mirror_b_page'] = kwargs.get('mirror_b', False)
+    
     # Required image paths
     required_args = ['common', 'uncommon', 'legendary', 'normal', 'special']
     missing_args = [arg for arg in required_args if not kwargs.get(arg)]
@@ -637,7 +703,7 @@ def batch(ctx, **kwargs):
     # Generate duplex images instead of mixed
     click.echo("\n🎨 Generating duplex pages...")
     try:
-        mixer.generate_mixed_image()
+        created_files = mixer.generate_mixed_image()
     except Exception as e:
         raise click.ClickException(f"Failed to generate images: {str(e)}")
 
