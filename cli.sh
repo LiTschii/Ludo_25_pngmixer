@@ -3,6 +3,9 @@
 # Ludo PNG Mixer CLI Shortcut
 # Usage: ./cli.sh [options]
 
+# Track if we activated venv ourselves
+ACTIVATED_VENV=false
+
 # Check if Python script exists
 if [ ! -f "png_mixer_cli.py" ]; then
     echo "Error: png_mixer_cli.py not found in current directory!"
@@ -19,6 +22,7 @@ if [ -z "$VIRTUAL_ENV" ]; then
             echo "❌ Failed to activate virtual environment!"
             exit 1
         fi
+        ACTIVATED_VENV=true
     else
         echo "⚠️  Warning: No virtual environment detected. Consider creating one:"
         echo "   python3 -m venv .venv"
@@ -34,8 +38,8 @@ python png_mixer_cli.py "$@"
 # Capture the exit code
 EXIT_CODE=$?
 
-# If we activated venv, deactivate it
-if [ -n "$VIRTUAL_ENV" ] && [ -d ".venv" ]; then
+# Only deactivate if we activated it ourselves
+if [ "$ACTIVATED_VENV" = true ]; then
     deactivate
 fi
 
