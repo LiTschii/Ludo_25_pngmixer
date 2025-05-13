@@ -139,51 +139,13 @@ class PNGMixerCLI:
             self.loaded_b_images[variant] = self.load_image(path)
             click.echo(f"  ✅ B-type {variant}: {path}")
     
-    def calculate_pages_needed(self, total_images):
-        """Calculate how many pages are needed for the given number of images"""
-        # Calculate images per page
+    def calculate_images_per_page(self):
+        """Calculate how many images fit on one page"""
         scale_factor = self.output_width / (self.images_per_row * 500)
         scaled_height = int(500 * scale_factor)
         rows_per_page = self.output_height // scaled_height
         images_per_page = self.images_per_row * rows_per_page
-        
-        # Calculate pages needed
-        images_per_type = total_images // 2
-        pages_needed = (images_per_type + images_per_page - 1) // images_per_page
-        
-        return pages_needed, images_per_page
-    
-    def create_page(self, images, page_type="A", page_number=1):
-        """Create a single page with given images"""
-        # Calculate image layout
-        img_width = 500
-        img_height = 500
-        scale_factor = self.output_width / (self.images_per_row * img_width)
-        scaled_width = int(img_width * scale_factor)
-        scaled_height = int(img_height * scale_factor)
-        
-        rows_possible = self.output_height // scaled_height
-        total_slots = self.images_per_row * rows_possible
-        
-        # Create the page
-        page_img = Image.new('RGB', (self.output_width, self.output_height), 'white')
-        
-        # Place images
-        for i, img in enumerate(images):
-            if i >= total_slots:
-                break
-                
-            row = i // self.images_per_row
-            col = i % self.images_per_row
-            
-            x = col * scaled_width
-            y = row * scaled_height
-            
-            # Scale the image
-            scaled_img = img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
-            page_img.paste(scaled_img, (x, y))
-        
-        return page_img, len(images), total_slots
+        return images_per_page
     
     def generate_duplex_images(self, output_path=None):
         """Generate separate A and B pages for duplex printing with configurable total images"""
@@ -201,12 +163,27 @@ class PNGMixerCLI:
             total_images += 1
             click.echo(f"⚠️ Total images must be even. Adjusted to {total_images}")
         
-        # Calculate pages needed
-        pages_needed, images_per_page = self.calculate_pages_needed(total_images)
+        # Calculate images per page
+        images_per_page = self.calculate_images_per_page()
+        
+        # Determine how many images to generate
+        if fill_all_pages:
+            # Calculate how many pages we need for the requested total
+            images_per_type = total_images // 2
+            pages_needed = (images_per_type + images_per_page - 1) // images_per_page
+            # Generate enough images to fill all pages
+            total_images_to_generate = pages_needed * images_per_page * 2
+            images_per_type = total_images_to_generate // 2
+            
+            if total_images_to_generate != total_images:
+                click.echo(f"📄 Adjusting to fill all pages: {total_images_to_generate} images total")
+        else:
+            images_per_type = total_images // 2
+            pages_needed = (images_per_type + images_per_page - 1) // images_per_page
         
         click.echo(f"📊 Generation Plan:")
-        click.echo(f"  Total images: {total_images}")
-        click.echo(f"  Images per type: {total_images // 2}")
+        click.echo(f"  Total images: {total_images_to_generate if fill_all_pages else total_images}")
+        click.echo(f"  Images per type: {images_per_type}")
         click.echo(f"  Images per page: {images_per_page}")
         click.echo(f"  Pages needed: {pages_needed} (for each type)")
         
@@ -223,17 +200,6 @@ class PNGMixerCLI:
         
         # B-type probability
         b_special_prob = dist['b_special'] / 100
-        
-        # Calculate actual images needed
-        if fill_all_pages:
-            # Fill all pages completely
-            total_slots = pages_needed * images_per_page
-            images_per_type = total_slots // 2
-            actual_total = images_per_type * 2
-            if actual_total != total_images:
-                click.echo(f"📄 Adjusting to fill all pages: {actual_total} images total")
-        else:
-            images_per_type = total_images // 2
         
         # Generate A-type images
         click.echo("\n🎯 Generating A-type images...")
@@ -258,6 +224,45 @@ class PNGMixerCLI:
                 else:
                     b_images.append(self.loaded_b_images['normal'])
         
+        # Create pages helper function
+        def create_and_save_page(images, page_images, page_type, page_num, base_name, mirror=False):
+            page_img = Image.new('RGB', (self.output_width, self.output_height), 'white')
+            
+            # Calculate layout
+            img_width = 500
+            img_height = 500
+            scale_factor = self.output_width / (self.images_per_row * img_width)
+            scaled_width = int(img_width * scale_factor)
+            scaled_height = int(img_height * scale_factor)
+            
+            # Place images
+            for i, img in enumerate(page_images):
+                row = i // self.images_per_row
+                col = i % self.images_per_row
+                
+                x = col * scaled_width
+                y = row * scaled_height
+                
+                scaled_img = img.resize((scaled_width, scaled_height), Image.Resampling.LANCZOS)
+                page_img.paste(scaled_img, (x, y))
+            
+            # Apply mirroring if needed
+            if mirror:
+                page_img = page_img.transpose(Image.FLIP_LEFT_RIGHT)
+                mirror_note = " (mirrored)"
+            else:
+                mirror_note = ""
+            
+            # Save page
+            if pages_needed == 1:
+                page_path = f"{base_name}_page_{page_type}.png"
+            else:
+                page_path = f"{base_name}_page_{page_type}_{page_num}.png"
+            
+            page_img.save(page_path)
+            click.echo(f"  ✅ Saved: {page_path} ({len(page_images)} images{mirror_note})")
+            return page_path
+        
         # Create pages
         base_name = os.path.splitext(output_path)[0]
         created_files = []
@@ -269,24 +274,9 @@ class PNGMixerCLI:
             end_idx = min(start_idx + images_per_page, len(a_images))
             page_images = a_images[start_idx:end_idx]
             
-            # Fill page if needed and fill_all_pages is True
-            if fill_all_pages and len(page_images) < images_per_page and page_images:
-                # Repeat images to fill the page
-                while len(page_images) < images_per_page:
-                    page_images.extend(a_images[start_idx:min(end_idx, start_idx + (images_per_page - len(page_images)))])
-                # Trim to exact size
-                page_images = page_images[:images_per_page]
-            
-            page_a, a_count, a_slots = self.create_page(page_images, "A", page_num + 1)
-            
-            if pages_needed == 1:
-                page_a_path = f"{base_name}_page_A.png"
-            else:
-                page_a_path = f"{base_name}_page_A_{page_num + 1}.png"
-            
-            page_a.save(page_a_path)
-            created_files.append(page_a_path)
-            click.echo(f"  ✅ Saved: {page_a_path} ({a_count} images)")
+            if page_images:  # Only create page if there are images
+                page_path = create_and_save_page(a_images, page_images, "A", page_num + 1, base_name)
+                created_files.append(page_path)
         
         # Create B-type pages
         click.echo("📄 Creating B-type pages...")
@@ -295,31 +285,9 @@ class PNGMixerCLI:
             end_idx = min(start_idx + images_per_page, len(b_images))
             page_images = b_images[start_idx:end_idx]
             
-            # Fill page if needed and fill_all_pages is True
-            if fill_all_pages and len(page_images) < images_per_page and page_images:
-                # Repeat images to fill the page
-                while len(page_images) < images_per_page:
-                    page_images.extend(b_images[start_idx:min(end_idx, start_idx + (images_per_page - len(page_images)))])
-                # Trim to exact size
-                page_images = page_images[:images_per_page]
-            
-            page_b, b_count, b_slots = self.create_page(page_images, "B", page_num + 1)
-            
-            # Apply mirroring only if configured
-            if mirror_b_page:
-                page_b = page_b.transpose(Image.FLIP_LEFT_RIGHT)
-                mirror_note = " (mirrored)"
-            else:
-                mirror_note = ""
-            
-            if pages_needed == 1:
-                page_b_path = f"{base_name}_page_B.png"
-            else:
-                page_b_path = f"{base_name}_page_B_{page_num + 1}.png"
-            
-            page_b.save(page_b_path)
-            created_files.append(page_b_path)
-            click.echo(f"  ✅ Saved: {page_b_path} ({b_count} images{mirror_note})")
+            if page_images:  # Only create page if there are images
+                page_path = create_and_save_page(b_images, page_images, "B", page_num + 1, base_name, mirror=mirror_b_page)
+                created_files.append(page_path)
         
         # Show statistics
         click.echo("\n📊 Generation Results:")
